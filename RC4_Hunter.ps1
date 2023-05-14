@@ -23,9 +23,12 @@ param (
        [string]
        [parameter(Mandatory = $true)]
        [ValidateScript({
-            if( -Not ($_.Substring(0,$_.LastIndexOf('\')) | Test-Path) ){
-                throw "The Path of $($_.Substring(0,$_.LastIndexOf('\'))) does not exist "
-            }
+        if(-Not ($_.Substring(0,$_.LastIndexOf('\')) | Test-Path)) {
+            throw "The Path of $($_.Substring(0,$_.LastIndexOf('\'))) does not exist"
+        }
+        if(-Not $_.EndsWith('.csv')) {
+            throw "Output file must be a .csv file"
+        }
             return $true
         })]
        $outputFile,
@@ -33,19 +36,29 @@ param (
        [int]
        $numberOfEvents = [int]::MaxValue
 )
+# Get all domain controllers
 $dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty name
-$events = @()
+
+# Prepare for event collection
+$events = New-Object System.Collections.Generic.List[Object]
 $queryProps = @{
     LogName = 'Security'
     FilterXPath = "Event[System[(EventID=4769 or EventID=4768)]] and Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x17']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x18']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x3']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x1']]"
     MaxEvents = $numberOfEvents
     ErrorAction = 'SilentlyContinue'
 }
+
+# Query each domain controller for events
 foreach ($dc in $dcs) {
     Write-Host "Getting events from Domain Controller:$dc" -ForegroundColor Yellow -BackgroundColor Black
-    $Events += Get-WinEvent @queryProps -ComputerName $dc
+    try {
+        $Events += Get-WinEvent @queryProps -ComputerName $dc
+    } catch {
+        Write-Error "Failed to get events from Domain Controller: $dc. Error:$($_.Exception.Message)"
+    }
 }
 
+# Write results to file
 Write-Host "Writing results to $outputFile" -ForegroundColor Yellow -BackgroundColor Black
 $Headers = "UserName,ServiceName,EncryptionType,IP"
 New-Item -Path $outputFile -Value $Headers -Force
@@ -62,4 +75,5 @@ foreach($Event in $Events){
     Add-Content -Path $outputFile -Value $DataString
 }
 
+# Remove duplicates
 Import-Csv -Path $outputfile | Select-Object -Property * -Unique | Export-Csv -Path $outputfile -NoTypeInformation
