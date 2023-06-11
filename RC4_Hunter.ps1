@@ -40,7 +40,7 @@ param (
 $dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty name
 
 # Prepare for event collection
-$events = New-Object System.Collections.Generic.List[Object]
+$events = New-Object System.Collections.ArrayList
 $queryProps = @{
     LogName = 'Security'
     FilterXPath = "Event[System[(EventID=4769 or EventID=4768)]] and Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x17']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x18']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x3']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x1']]"
@@ -49,10 +49,13 @@ $queryProps = @{
 }
 
 # Query each domain controller for events
+$counter = 0
 foreach ($dc in $dcs) {
     Write-Host "Getting events from Domain Controller:$dc" -ForegroundColor Yellow -BackgroundColor Black
     try {
-        $Events += Get-WinEvent @queryProps -ComputerName $dc
+        $events.Add( (Get-WinEvent @queryProps -ComputerName $dc) ) | out-null
+        Write-Host -Object "Total RC4 events $($Events[$counter].count) collected from $dc" -ForegroundColor Yellow -BackgroundColor Black
+        $counter++
     } catch {
         Write-Error "Failed to get events from Domain Controller: $dc. Error:$($_.Exception.Message)"
     }
@@ -61,19 +64,22 @@ foreach ($dc in $dcs) {
 # Write results to file
 Write-Host "Writing results to $outputFile" -ForegroundColor Yellow -BackgroundColor Black
 $Headers = "UserName,ServiceName,EncryptionType,IP"
-New-Item -Path $outputFile -Value $Headers -Force
+New-Item -Path "$outputFile.workfile.csv" -Value $Headers -Force | Out-Null
 add-content -Path $outputFile -Value ""
 
-foreach($Event in $Events){
-    $Message = $Event.message
-    $Mes = $Message.Split("`r`n")
-    $Mes = $Mes.replace(":","=")
-    $Mes = $Mes | Select-String -Pattern ("Account Name=","Service Name=","Ticket Encryption Type=","Client Address=") 
-    $Data = $Mes | ConvertFrom-StringData
-    $DataIP = ($Data.'Client Address' | Select-String -Pattern "\d{1,3}(\.\d{1,3}){3}" -AllMatches).Matches.value
-    $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP)
-    Add-Content -Path $outputFile -Value $DataString
+foreach($Entry in $Events){
+    foreach($Event in $Entry) {
+        $Message = $Event.message
+        $Mes = $Message.Split("`r`n")
+        $Mes = $Mes.replace(":","=")
+        $Mes = $Mes | Select-String -Pattern ("Account Name=","Service Name=","Ticket Encryption Type=","Client Address=") 
+        $Data = $Mes | ConvertFrom-StringData
+        $DataIP = ($Data.'Client Address' | Select-String -Pattern "\d{1,3}(\.\d{1,3}){3}" -AllMatches).Matches.value
+        $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP)
+        Add-Content -Path "$outputFile.workfile.csv" -Value $DataString
+    }
 }
 
 # Remove duplicates
-Import-Csv -Path $outputfile | Select-Object -Property * -Unique | Export-Csv -Path $outputfile -NoTypeInformation
+Import-Csv -Path "$outputFile.workfile.csv" | Select-Object -Property * -Unique | Export-Csv -Path $outputfile -NoTypeInformation -Force
+remove-item -Path "$outputFile.workfile.csv" -Force
