@@ -31,10 +31,13 @@ param (
         }
             return $true
         })]
-       $outputFile,
+       $OutputFile,
 
        [int]
-       $numberOfEvents = [int]::MaxValue
+       $NumberOfEvents = [int]::MaxValue,
+
+       [switch]
+       $EventTime
 )
 # Get all domain controllers
 $dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty name
@@ -44,7 +47,7 @@ $events = New-Object System.Collections.ArrayList
 $queryProps = @{
     LogName = 'Security'
     FilterXPath = "Event[System[(EventID=4769 or EventID=4768)]] and Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x17']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x18']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x3']] or Event[EventData[Data[@Name='TicketEncryptiontYPE']='0x1']]"
-    MaxEvents = $numberOfEvents
+    MaxEvents = $NumberOfEvents
     ErrorAction = 'SilentlyContinue'
 }
 
@@ -54,7 +57,7 @@ foreach ($dc in $dcs) {
     Write-Host "Getting events from Domain Controller:$dc" -ForegroundColor Yellow -BackgroundColor Black
     try {
         $events.Add( (Get-WinEvent @queryProps -ComputerName $dc) ) | out-null
-        Write-Host -Object "Total RC4 events $($Events[$counter].count) collected from $dc" -ForegroundColor Yellow -BackgroundColor Black
+        Write-Host -Object "Total RC4 events $($Events[$counter].count) collected from $dc"
         $counter++
     } catch {
         Write-Error "Failed to get events from Domain Controller: $dc. Error:$($_.Exception.Message)"
@@ -62,10 +65,11 @@ foreach ($dc in $dcs) {
 }
 
 # Write results to file
-Write-Host "Writing results to $outputFile" -ForegroundColor Yellow -BackgroundColor Black
-$Headers = "UserName,ServiceName,EncryptionType,IP"
-New-Item -Path "$outputFile.workfile.csv" -Value $Headers -Force | Out-Null
-add-content -Path $outputFile -Value ""
+Write-Host "Writing results to $OutputFile" -ForegroundColor Yellow -BackgroundColor Black
+$Headers = "UserName,ServiceName,EncryptionType,IP,EventTime"
+#New-Item -Path $outputFile -Value $Headers -Force | Out-Null
+New-Item -Path "$OutputFile.workfile.csv" -Value $Headers -Force | Out-Null
+add-content -Path "$OutputFile.workfile.csv" -Value ""
 
 foreach($Entry in $Events){
     foreach($Event in $Entry) {
@@ -75,11 +79,15 @@ foreach($Entry in $Events){
         $Mes = $Mes | Select-String -Pattern ("Account Name=","Service Name=","Ticket Encryption Type=","Client Address=") 
         $Data = $Mes | ConvertFrom-StringData
         $DataIP = ($Data.'Client Address' | Select-String -Pattern "\d{1,3}(\.\d{1,3}){3}" -AllMatches).Matches.value
-        $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP)
-        Add-Content -Path "$outputFile.workfile.csv" -Value $DataString
+        if($EventTime) {
+            $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP + "," + $event.TimeCreated.ToString("dd/MM/yyyy:hh:mm"))
+        } else {
+            $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP)
+        }
+        Add-Content -Path "$OutputFile.workfile.csv" -Value $DataString
     }
 }
 
 # Remove duplicates
-Import-Csv -Path "$outputFile.workfile.csv" | Select-Object -Property * -Unique | Export-Csv -Path $outputfile -NoTypeInformation -Force
-remove-item -Path "$outputFile.workfile.csv" -Force
+Import-Csv -Path "$OutputFile.workfile.csv" | Select-Object -Property * -Unique | Export-Csv -Path $Outputfile -NoTypeInformation -Force
+remove-item -Path "$OutputFile.workfile.csv" -Force
