@@ -11,7 +11,7 @@
  2. Audit the creation of Kerberos tickets (TGT/ST). After enabling auditing on your domain controllers, you will start to get the following events:
     * 4768 (for TGT)
     * 4769 (for ST)
- 3. Have RPC access to all your domain controllers.
+ 3. Have RPC access or PowerShell remoting access to all your domain controllers.
  
  This script queries all your domain controllers for the usage of RC4 in Kerberos tickets.
  The script outputs the results to a CSV file.
@@ -44,6 +44,11 @@
  The script searches for events that occurred within the specified number of hours before the script is run.
  The value of -HoursBack must be an integer between 1 and 24, inclusive.
 
+.PARAMETER UseRemoting
+ The -UseRemoting switch enables PowerShell remoting to query the domain controllers for events.
+ If this switch is specified and the domain controllers are accessible via remoting, the script will use remoting.
+ If the switch is not specified or the domain controllers are not accessible via remoting, the script will fall back to RPC calls.
+
 .EXAMPLE  
  .\RC4_Hunter.ps1 -OutputFile '.\Results.csv'
  The output file contains information from the last 24 hours.
@@ -58,6 +63,11 @@
  .\RC4_Hunter.ps1 -OutputFile '.\Results.csv' -EventTime
  The output file contains information from the last 24 hours.
  The output also includes a timestamp for each event.
+
+.EXAMPLE
+ .\RC4_Hunter.ps1 -OutputFile '.\Results.csv' -UseRemoting
+ The output file contains information from the last 24 hours.
+ The script uses PowerShell remoting to query the domain controllers for events.
 #>
 
 param (
@@ -86,13 +96,17 @@ param (
     [Parameter(Mandatory=$false,
                HelpMessage="The number of hours in the past to search for events. If not specified, the default is 24 hours.")]
     [ValidateRange(1,24)]
-    [int] $HoursBack = 24
+    [int] $HoursBack = 24,
+
+    [Parameter(Mandatory=$false,
+               HelpMessage="Use PowerShell remoting to query the domain controllers for events.")]
+    [switch] $UseRemoting
 )
 
 
 # Get all domain controllers
-$dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty name
-Write-Host -Object "Found $($dcs.count) Domain Controllers" -BackgroundColor Black -ForegroundColor Yellow
+$dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty Name
+Write-Host -Object "Found $($dcs.Count) Domain Controllers" -BackgroundColor Black -ForegroundColor Yellow
 
 # Prepare for event collection
 $events = New-Object System.Collections.ArrayList
@@ -104,44 +118,84 @@ $queryProps = @{
     ErrorAction = 'SilentlyContinue'
 }
 
+if ($UseRemoting) {
+    # Check if all of the domain controllers are accessible using PowerShell remoting
+    foreach ($dc in $dcs) {
+        Write-Verbose "Trying to connect to Domain Controller $dc through PowerShell Remoting"
+        Test-WSMan -ComputerName $dc -ErrorAction SilentlyContinue | Out-Null
+        if(-not($?)) {
+            $reachableDCs = $false
+            Write-Host "Domain Controller $dc is not available through PowerShell Remoting" -ForegroundColor Red -BackgroundColor Black
+            break
+        }
+        $reachableDCs = $true
+    }
 
-# Query each domain controller for events
-$counter = 0
-foreach ($dc in $dcs) {
-    Write-Host "Getting events from Domain Controller:$dc" -ForegroundColor Yellow -BackgroundColor Black
-    try {
-        $events.Add( (Get-WinEvent @queryProps -ComputerName $dc) ) | out-null
-        Write-Host -Object "Total RC4 events $($Events[$counter].count) collected from $dc"
-        $counter++
-    } catch {
-        Write-Error "Failed to get events from Domain Controller: $dc. Error:$($_.Exception.Message)"
+    if ($reachableDCs) {
+        Write-Host "Querying all DCs through PS-Remoting"  -ForegroundColor Yellow -BackgroundColor Black
+        $session = New-PSSession -ComputerName $dcs -ErrorAction SilentlyContinue
+        if ($session) {
+            $events = Invoke-Command -Session $session -ScriptBlock {
+                Get-WinEvent @using:queryProps
+            }
+            Remove-PSSession -Session $session
+            Write-Host "Total events collected from Domain Controllers: $($events.count)" -BackgroundColor Black -ForegroundColor Yellow
+        }
+        else {
+            Write-Warning "Unable to establish a remote session with one or more domain controllers. Falling back to RPC calls."
+            $UseRemoting = $false
+        }
+    }
+    else {
+        Write-Warning "One or more domain controllers are not reachable through PS-Remoting. Falling back to RPC calls."
+        $UseRemoting = $false
+    }
+}
+
+if (-not $UseRemoting) {
+    # Query each domain controller for events using RPC calls
+    $counter = 0
+    foreach ($dc in $dcs) {
+        Write-Host "Getting events from Domain Controller: $dc" -ForegroundColor Yellow -BackgroundColor Black
+        try {
+            $events.Add((Get-WinEvent @queryProps -ComputerName $dc)) | Out-Null
+            Write-Host -Object "Total RC4 events $($Events[$counter].Count) collected from $dc" -BackgroundColor Black -ForegroundColor Yellow
+            $counter++
+        }
+        catch {
+            Write-Host "Failed to get events from Domain Controller: $dc.`n" -ForegroundColor Red -BackgroundColor Black
+            Write-Verbose "Error: $($_.Exception.Message)"
+        }
     }
 }
 
 # Write results to file
 Write-Host "Writing results to $OutputFile" -ForegroundColor Yellow -BackgroundColor Black
-$Headers = "UserName,ServiceName,EncryptionType,IP,EventTime"
-#New-Item -Path $outputFile -Value $Headers -Force | Out-Null
-New-Item -Path "$OutputFile.workfile.csv" -Value $Headers -Force | Out-Null
-add-content -Path "$OutputFile.workfile.csv" -Value ""
+if($EventTime) {
+    $Headers = "UserName,ServiceName,EncryptionType,IP,EventTime"
+} else {
+    $Headers = "UserName,ServiceName,EncryptionType,IP"
+}
+New-Item -Path "$OutputFile.workfile.csv" -Force | Out-Null
+Add-Content -Path "$OutputFile.workfile.csv" -Value $Headers
 
-foreach($Entry in $Events){
-    foreach($Event in $Entry) {
-        $Message = $Event.message
+foreach ($Entry in $Events) {
+    foreach ($Event in $Entry) {
+        $Message = $Event.Message
         $Mes = $Message.Split("`r`n")
-        $Mes = $Mes.replace(":","=")
-        $Mes = $Mes | Select-String -Pattern ("Account Name=","Service Name=","Ticket Encryption Type=","Client Address=") 
+        $Mes = $Mes.Replace(":", "=")
+        $Mes = $Mes | Select-String -Pattern ("Account Name=", "Service Name=", "Ticket Encryption Type=", "Client Address=") 
         $Data = $Mes | ConvertFrom-StringData
-        $DataIP = ($Data.'Client Address' | Select-String -Pattern "\d{1,3}(\.\d{1,3}){3}" -AllMatches).Matches.value
-        if($EventTime) {
-            $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP + "," + $event.TimeCreated.ToString("dd/MM/yyyy:hh:mm"))
+        $DataIP = ($Data.'Client Address' | Select-String -Pattern "\d{1,3}(\.\d{1,3}){3}" -AllMatches).Matches.Value
+        if ($EventTime) {
+            $DataString = ($Data.'Account Name', $Data.'Service Name', $Data.'Ticket Encryption Type', $DataIP, $event.TimeCreated.ToString("dd/MM/yyyy:hh:mm")) -join ","
         } else {
-            $DataString = ($Data.'Account Name' + "," + $Data.'Service Name' + "," + $Data.'Ticket Encryption Type' + "," + $DataIP)
+            $DataString = ($Data.'Account Name', $Data.'Service Name', $Data.'Ticket Encryption Type', $DataIP) -join ","
         }
         Add-Content -Path "$OutputFile.workfile.csv" -Value $DataString
     }
 }
 
 # Remove duplicates
-Import-Csv -Path "$OutputFile.workfile.csv" | Select-Object -Property * -Unique | Export-Csv -Path $Outputfile -NoTypeInformation -Force
-remove-item -Path "$OutputFile.workfile.csv" -Force
+Import-Csv -Path "$OutputFile.workfile.csv" | Select-Object -Property * -Unique | Export-Csv -Path $OutputFile -NoTypeInformation -Force
+Remove-Item -Path "$OutputFile.workfile.csv" -Force
