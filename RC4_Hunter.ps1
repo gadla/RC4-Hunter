@@ -17,7 +17,8 @@
  The script outputs the results to a CSV file.
 
 .LINK
- GitHub Repository: [RC4_Hunter.ps1](https://github.com/gadla/RC4-Hunter)
+ https://github.com/gadla/RC4-Hunter
+ 
 
 .PARAMETER OutputFile
  This is a required parameter. The script will not run without a provided value.
