@@ -74,15 +74,15 @@ param (
     [Parameter(Mandatory=$true,
                HelpMessage="The full path of the output file. The file must be a .csv file.")]
     [ValidateScript({
-        $resolvedPath = Resolve-Path $_
-        if(-Not ($resolvedPath.Path.Substring(0,$resolvedPath.Path.LastIndexOf('\')) | Test-Path)) {
-            throw "The Path of $($_.Substring(0,$_.LastIndexOf('\'))) does not exist"
+        $resolvedPath = Resolve-Path $_ -ErrorAction SilentlyContinue
+        if (-not $resolvedPath) {
+            $resolvedPath = Join-Path $PWD $_
         }
-        if(-Not $resolvedPath.Path.EndsWith('.csv')) {
-            throw "Output file must be a .csv file"
+        if (-not $resolvedPath.Path.EndsWith('.csv')) {
+            throw "Output file must have a .csv extension"
         }
-            return $true
-        })]
+        return $true
+    })]
     [string] $OutputFile,
 
     [Parameter(Mandatory=$false,
