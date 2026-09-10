@@ -90,12 +90,13 @@ param (
             throw "Output path points to a directory, expected a .csv file path: $_"
         }
 
-        $parentPath = Split-Path -Path $_ -Parent
-        if ([string]::IsNullOrWhiteSpace($parentPath)) {
-            $parentPath = $PWD.Path
-        } elseif (-not [System.IO.Path]::IsPathRooted($parentPath)) {
-            $parentPath = Join-Path -Path $PWD.Path -ChildPath $parentPath
-        }
+$parentPath = Split-Path -Path $_ -Parent
+$fileSystemCwd = (Get-Location -PSProvider FileSystem).ProviderPath
+if ([string]::IsNullOrWhiteSpace($parentPath)) {
+    $parentPath = $fileSystemCwd
+} elseif (-not [System.IO.Path]::IsPathRooted($parentPath)) {
+    $parentPath = Join-Path -Path $fileSystemCwd -ChildPath $parentPath
+}
 
         if (-not (Test-Path -LiteralPath $parentPath -PathType Container)) {
             throw "Output directory does not exist: $parentPath"
