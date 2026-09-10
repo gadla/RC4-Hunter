@@ -74,8 +74,20 @@ param (
     [Parameter(Mandatory=$true,
                HelpMessage="The full path of the output file. The file must be a .csv file.")]
     [ValidateScript({
+        if ([string]::IsNullOrWhiteSpace($_)) {
+            throw "Output file path must not be empty"
+        }
+
+        if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($_)) {
+            throw "Output file path must not contain wildcard characters: $_"
+        }
+
         if (-not [string]::Equals([System.IO.Path]::GetExtension($_), '.csv', [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Output file must have a .csv extension"
+        }
+
+        if (Test-Path -LiteralPath $_ -PathType Container) {
+            throw "Output path points to a directory, expected a .csv file path: $_"
         }
 
         $parentPath = Split-Path -Path $_ -Parent
