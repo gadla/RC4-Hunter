@@ -74,19 +74,41 @@ param (
     [Parameter(Mandatory=$true,
                HelpMessage="The full path of the output file. The file must be a .csv file.")]
     [ValidateScript({
-        $resolvedPath = Resolve-Path $_ -ErrorAction SilentlyContinue
-        if (-not $resolvedPath) {
-            $resolvedPath = Join-Path $PWD $_
+        if ([string]::IsNullOrWhiteSpace($_)) {
+            throw "Output file path must not be empty"
         }
-        if (-not $resolvedPath.Path.EndsWith('.csv')) {
+
+        if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($_)) {
+            throw "Output file path must not contain wildcard characters: $_"
+        }
+
+        if (-not [string]::Equals([System.IO.Path]::GetExtension($_), '.csv', [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Output file must have a .csv extension"
         }
+
+        if (Test-Path -LiteralPath $_ -PathType Container) {
+            throw "Output path points to a directory, expected a .csv file path: $_"
+        }
+
+$parentPath = Split-Path -Path $_ -Parent
+$fileSystemCwd = (Get-Location -PSProvider FileSystem).ProviderPath
+if ([string]::IsNullOrWhiteSpace($parentPath)) {
+    $parentPath = $fileSystemCwd
+} elseif (-not [System.IO.Path]::IsPathRooted($parentPath)) {
+    $parentPath = Join-Path -Path $fileSystemCwd -ChildPath $parentPath
+}
+
+        if (-not (Test-Path -LiteralPath $parentPath -PathType Container)) {
+            throw "Output directory does not exist: $parentPath"
+        }
+
         return $true
     })]
     [string] $OutputFile,
 
     [Parameter(Mandatory=$false,
                HelpMessage="The maximum number of events to retrieve. If not specified, the default is the maximum integer value.")]
+    [ValidateRange(1, [int]::MaxValue)]
     [int] $NumberOfEvents = [int]::MaxValue,
 
     [Parameter(Mandatory=$false,
