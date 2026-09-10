@@ -74,19 +74,28 @@ param (
     [Parameter(Mandatory=$true,
                HelpMessage="The full path of the output file. The file must be a .csv file.")]
     [ValidateScript({
-        $resolvedPath = Resolve-Path $_ -ErrorAction SilentlyContinue
-        if (-not $resolvedPath) {
-            $resolvedPath = Join-Path $PWD $_
-        }
-        if (-not $resolvedPath.Path.EndsWith('.csv')) {
+        if (-not [string]::Equals([System.IO.Path]::GetExtension($_), '.csv', [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Output file must have a .csv extension"
         }
+
+        $parentPath = Split-Path -Path $_ -Parent
+        if ([string]::IsNullOrWhiteSpace($parentPath)) {
+            $parentPath = $PWD.Path
+        } elseif (-not [System.IO.Path]::IsPathRooted($parentPath)) {
+            $parentPath = Join-Path -Path $PWD.Path -ChildPath $parentPath
+        }
+
+        if (-not (Test-Path -LiteralPath $parentPath -PathType Container)) {
+            throw "Output directory does not exist: $parentPath"
+        }
+
         return $true
     })]
     [string] $OutputFile,
 
     [Parameter(Mandatory=$false,
                HelpMessage="The maximum number of events to retrieve. If not specified, the default is the maximum integer value.")]
+    [ValidateRange(1, [int]::MaxValue)]
     [int] $NumberOfEvents = [int]::MaxValue,
 
     [Parameter(Mandatory=$false,
